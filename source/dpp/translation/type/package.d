@@ -146,7 +146,7 @@ private string translateAggregate(in from!"clang".Type type_,
         if(hasAnonymousSpelling(type))
 	{
 		context.log("has anonymous spelling: ",context.spellingOrNickname(type.declaration));
-		return context.spellingOrNickname(type.declaration);
+		return context.spellingOrNickname(type.declaration).makeFromImport;
 	}
 
         // A struct in a namespace will have a type of kind Record with the fully
@@ -154,7 +154,7 @@ private string translateAggregate(in from!"clang".Type type_,
         // itself has only the name (e.g. random_access_iterator_tag), so we get
         // the spelling from the type's declaration instead of from the type itself.
         // See it.cpp.templates.__copy_move and contract.namespace.struct.
-        if( type.spelling.startsWith(":")) return type.declaration.spelling ~ pointeeText;
+        if( type.spelling.startsWith(":")) return type.declaration.spelling.makeFromImport ~ pointeeText.makeFromImport;
 
         // Clang template types have a spelling such as `Foo<unsigned int, unsigned short>`.
         // We need to extract the "base" name (e.g. Foo above) then translate each type
@@ -170,7 +170,7 @@ private string translateAggregate(in from!"clang".Type type_,
 		    string ret = type.spelling;
 		    if (ret.startsWith("typename "))
 			    ret = ret["typename ".length..$];
-		    return ret~pointeeText;
+		    return ret.makeFromImport~pointeeText;
 	    }
             const baseName = type.spelling[0 .. openAngleBracketIndex];
             templateArgsTranslation = (type
@@ -181,20 +181,20 @@ private string translateAggregate(in from!"clang".Type type_,
                     final switch(kind) with(TemplateArgumentKind) {
                         case GenericType:
                         case SpecialisedType:
-                            return translate(type.typeTemplateArgument(i), context, translatingFunction);
+                            return translate(type.typeTemplateArgument(i), context, translatingFunction).makeFromImport;
                         case Value:
-                            return templateParameterSpelling(type, i);
+                            return templateParameterSpelling(type, i).makeFromImport;
                     }
                  })).array;
             if (!type.pointee.isInvalid)
-	         templateArgsTranslation ~= pointeeText;
+	         templateArgsTranslation ~= pointeeText.makeFromImport;
             return baseName ~ "!(" ~ templateArgsTranslation.join(",") ~ ")";
         }
 	// std::shared_ptr will be considered an aggregate
         return type.spelling~pointeeText;
     }
 
-    const result = addModifiers(type, spelling)
+    const result = addModifiers(type, makeFromImport(spelling))
         .translateElaborated
         .replace("<", "!(")
         .replace(">", ")")
@@ -205,18 +205,49 @@ private string translateAggregate(in from!"clang".Type type_,
 }
 
 
+string makeFromImport(string typeName) @trusted pure
+{
+	import std.string: lastIndexOf, indexOf;
+	import std.algorithm:canFind,minElement,map;
+	import std.format:format;
+	import dpp.runtime.context:safeArray;
+
+	auto firstIndexOf(string haystack, string[] needles)
+	{
+		return needles.map!(n=>haystack.indexOf(n))
+			.safeArray
+			.minElement!(a => (a==-1) ? haystack.length : a);
+	}
+
+	if (typeName.canFind("Opaque!("))
+		return typeName;
+
+	auto c = typeName.indexOf("const(");
+	if (c != -1)
+		return typeName[0..c] ~ "const(" ~ makeFromImport(typeName[c+"const(".length..$]);
+
+	auto i = firstIndexOf(typeName,["!","(",".."]);
+	if (i == -1) i = typeName.length;
+
+	auto j = typeName[0..i].lastIndexOf(".");
+	
+	return (j==-1)  ? typeName : format!"from!q{%s}.%s"(typeName[0..j],typeName[j+1..$]);
+}
+
+
 private string translateConstantArray(in from!"clang".Type type,
-                                      ref from!"dpp.runtime.context".Context context,
-                                      in from!"std.typecons".Flag!"translatingFunction" translatingFunction)
+			      ref from!"dpp.runtime.context".Context context,
+			      in from!"std.typecons".Flag!"translatingFunction" translatingFunction)
 @safe pure
 {
-    import std.conv: text;
+	import std.conv: text;
 
-    context.indent.log("Constant array of # ", type.numElements);
+	context.indent.log("Constant array of # ", type.numElements);
+	auto translation = translate(type.elementType, context).makeFromImport;
 
-    return translatingFunction
-        ? translate(type.elementType, context) ~ `*`
-        : translate(type.elementType, context) ~ `[` ~ type.numElements.text ~ `]`;
+	return translatingFunction
+		? translation ~ `*`
+		: translation ~ `[` ~ type.numElements.text ~ `]`;
 }
 
 
@@ -233,7 +264,7 @@ private string translateDependentSizedArray(
     auto start = type.spelling.find("["); start = start[1 .. $];
     auto endIndex = start.countUntil("]");
 
-    return translate(type.elementType, context) ~ `[` ~ start[0 .. endIndex] ~ `]`;
+    return translate(type.elementType, context).makeFromImport ~ `[` ~ start[0 .. endIndex] ~ `]`;
 }
 
 
@@ -242,7 +273,7 @@ private string translateIncompleteArray(in from!"clang".Type type,
                                         in from!"std.typecons".Flag!"translatingFunction" translatingFunction)
 @safe pure
 {
-    const dType = translate(type.elementType, context);
+    const dType = translate(type.elementType, context).makeFromImport;
     // if translating a function, we want C's T[] to translate
     // to T*, otherwise we want a flexible array
     return translatingFunction ? dType ~ `*` : dType ~ "[0]";
@@ -255,7 +286,7 @@ private string translateTypedef(in from!"clang".Type type,
 @safe pure
 {
     const translation = translate(type.declaration.underlyingType, context, translatingFunction);
-    return addModifiers(type, translation);
+    return addModifiers(type, translation.makeFromImport);
 }
 
 private string translatePointer(in from!"clang".Type type,
@@ -304,8 +335,8 @@ private string translatePointer(in from!"clang".Type type,
     }
 
     const ptrType = addConst
-        ? `const(` ~ rawType ~ maybeStar ~ `)`
-        : rawType ~ maybeStar;
+        ? `const(` ~ rawType.makeFromImport ~ maybeStar ~ `)`
+        : rawType.makeFromImport ~ maybeStar;
 
     return ptrType;
 }
@@ -321,11 +352,11 @@ private string translateFunctionProto(in from!"clang".Type type,
     import std.algorithm: map;
     import std.array: join, array;
 
-    const params = type.paramTypes.map!(a => translate(a, context)).array;
+    const params = type.paramTypes.map!(a => translate(a, context).makeFromImport).array;
     const isVariadic = params.length > 0 && type.isVariadicFunction;
     const variadicParams = isVariadic ? ["..."] : [];
     const allParams = params ~ variadicParams;
-    return text(translate(type.returnType, context), " function(", allParams.join(", "), ")");
+    return text(translate(type.returnType, context).makeFromImport, " function(", allParams.join(", "), ")");
 }
 
 private string translateLvalueRef(in from!"clang".Type type,

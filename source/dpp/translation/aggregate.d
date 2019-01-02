@@ -95,10 +95,13 @@ string[] translateEnum(in from!"clang".Cursor cursor,
     auto enumName = context.spellingOrNickname(cursor);
 
     string[] lines;
-    foreach(member; cursor) {
-        if(!member.isDefinition) continue;
-        auto memName = member.spelling;
-        lines ~= `enum ` ~ memName ~ ` = ` ~ enumName ~ `.` ~ memName ~ `;`;
+    if (!context.noGenerateExtraCEnum)
+    {
+	    foreach(member; cursor) {
+		if(!member.isDefinition) continue;
+		auto memName = member.spelling;
+		lines ~= `enum ` ~ memName ~ ` = ` ~ enumName ~ `.` ~ memName ~ `;`;
+	    }
     }
 
     return
@@ -215,8 +218,9 @@ string[] translateAggregate(
 {
     import dpp.translation.translation: translate, isForwardDeclaration;
     import clang: Cursor, Type;
-    import std.algorithm: map;
+    import std.algorithm: map, count;
     import std.array: array;
+    import std.string: strip;
 
     if (cursor.isForwardDeclaration)
     {
@@ -259,8 +263,9 @@ string[] translateAggregate(
         lines ~= bitFieldInfo.handle(member);
 
         if(skipMember(member)) continue;
+        auto fieldLines = translate(member, context).map!(a => "    " ~ a).array;
+	lines ~= fieldLines;
 
-        lines ~= translate(member, context).map!(a => "    " ~ a).array;
 
         // Possibly deal with C11 anonymous structs/unions. See issue #29.
         lines ~= maybeC11AnonymousRecords(cursor, member, context);
@@ -272,11 +277,21 @@ string[] translateAggregate(
     lines ~= maybeOperators(cursor, name);
     lines ~= maybeDisableDefaultCtor(cursor, dKeyword);
 
-    lines ~= `}`;
-
+    lines ~= "}\n";
+    
     return lines;
 }
 
+string makeOffsetSizeAttribute(in from!"clang".Cursor member) @safe pure {
+    import clang.c.index:clang_Cursor_getOffsetOfField, clang_Type_getSizeOf;
+    import std.conv: text;
+    import std.exception:enforce;
+    auto offsetOf = clang_Cursor_getOffsetOfField(member.cx);
+    //enforce (offsetOf == -1 || (offsetOf % 8 ==0));
+    offsetOf = (offsetOf == -1) ? -1 : (offsetOf / 8);
+    auto sizeOf = clang_Type_getSizeOf(member.type.cx);
+    return  text("@DppOffsetSize(",offsetOf,",",sizeOf, ")");
+}
 
 private bool skipMember(in from!"clang".Cursor member) @safe @nogc pure nothrow {
     import clang: Cursor;
@@ -299,7 +314,7 @@ string[] translateField(in from!"clang".Cursor field,
 {
 
     import dpp.translation.dlang: maybeRename;
-    import dpp.translation.type: translate;
+    import dpp.translation.type: translate,makeFromImport;
     import clang: Cursor, Type;
     import std.conv: text;
     import std.typecons: No;
@@ -315,12 +330,13 @@ string[] translateField(in from!"clang".Cursor field,
     // Remember the field name in case it ends up clashing with a type.
     context.rememberField(field.spelling);
     auto maybeRenamedFieldType = maybeRenameType(field,context).type;
-    const type = translate(maybeRenamedFieldType, context, No.translatingFunction);
+    const type = translate(maybeRenamedFieldType, context, No.translatingFunction).makeFromImport;
 
     return field.isBitField
         ? translateBitField(field, context, type)
-        : [text(type, " ", maybeRename(field, context), ";")];
+        : [text(makeOffsetSizeAttribute(field)," ", type, " ", maybeRename(field, context), ";")];
 }
+
 
 string[] translateBitField(in from!"clang".Cursor cursor,
                            ref from!"dpp.runtime.context".Context context,
@@ -528,6 +544,7 @@ string[] translateBase(in from!"clang".Cursor cursor,
 do
 {
     import dpp.translation.type: translate;
+    import dpp.translation.type:makeFromImport;
     import std.typecons: No;
     import std.algorithm: canFind;
 
@@ -544,7 +561,7 @@ do
     const fieldName = "__base";
 
     return [
-        type ~ " " ~ fieldName ~ ";",
+        type.makeFromImport ~ " " ~ fieldName ~ ";",
         `alias ` ~ fieldName ~ ` this;`,
     ];
 }
@@ -553,8 +570,9 @@ string renameTypeToBlob(string spelling, ptrdiff_t size) @safe pure
 {
 	import std.format:format;
 	import std.conv:to;
+	import dpp.translation.type:makeFromImport;
 	string sizeString = (size>0 && size!=-1) ? size.to!string : "FIXME";
-	return format!`Opaque!("%s",%s)`(spelling,sizeString);
+	return format!`Opaque!(q{%s},%s)`(spelling.makeFromImport,sizeString);
 }
 
 // TODO - not just to blob - also remaps type
@@ -565,14 +583,15 @@ from!"clang".Type maybeRenameTypeToBlob(const from!"clang".Type type, //in from!
 	import clang:Type;
 	import std.traits:Unqual;
 	import std.conv:to;
+	import dpp.translation.type:makeFromImport;
 	auto ret = mutableType(type);
 	if(context.isTypeBlobSubstituted(ret.spelling))
 	{
-		ret.spelling = renameTypeToBlob(type.spelling,getSizeOf(type));
+		ret.spelling = renameTypeToBlob(type.spelling,getSizeOf(type)).makeFromImport;
 	}
 	else
 	{
-		ret.spelling = context.remapType(ret.spelling);
+		ret.spelling = context.remapType(ret.spelling).makeFromImport;
 	}
 	return cast(Type) ret;
 }
@@ -590,7 +609,7 @@ private auto mutableType(const from!"clang".Type type) @trusted pure
 	return ret;
 }
 
-private auto mutableCursor(const from!"clang".Cursor cursor) @trusted pure
+package auto mutableCursor(const from!"clang".Cursor cursor) @trusted pure
 {
 	import std.traits:Unqual;
 	auto ret = cast(Unqual!(from!"clang".Cursor)) cursor;

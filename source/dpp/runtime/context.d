@@ -330,6 +330,17 @@ struct Context {
 		this.typeRemappingsRegex[typeRemapping.originalType] = regex(typeRemapping.originalType);
     }
 
+    auto noGenerateExtraCEnum() @safe pure
+    {
+	    return options.noGenerateExtraCEnum;
+    }
+
+    bool isNamespaceSelected(string namespace) @safe pure
+    {
+	    import std.algorithm:canFind;
+	return (options.onlyNamespaces.length ==0 || options.onlyNamespaces.canFind(namespace));
+    }
+
     ref Context indent() @safe pure return {
         options = options.indent;
         return this;

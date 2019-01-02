@@ -32,6 +32,8 @@ struct Options {
     string headerBlacklistFile;
     string typeRemappingsFile;
     string functionBlacklistFile;
+    bool noGenerateExtraCEnum;
+    string[] onlyNamespaces;
 
     this(string[] args) {
 
@@ -108,6 +110,8 @@ struct Options {
 		"map-type-file", "File specifying type remappings",&typeRemappingsFile,
 		"blacklist-header-file", "File specifying headers to blacklist",&headerBlacklistFile,
 		"blacklist-function-file", "File specifying functions to blacklist",&functionBlacklistFile,
+		"no-generate-extra-c-enum", "Do not generate C-style additional enums",&noGenerateExtraCEnum,
+		"only-namespace", "Only process c++ code within specified namespace",&onlyNamespaces,
             );
 
         if(helpInfo.helpWanted) {

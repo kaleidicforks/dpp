@@ -126,10 +126,9 @@ private string returnType(in from!"clang".Cursor cursor,
                           ref from!"dpp.runtime.context".Context context)
     @safe
 {
-    import dpp.translation.type: translate;
+    import dpp.translation.type: translate,makeFromImport;
     import clang: Cursor;
     import std.typecons: Yes;
-
     const indentation = context.indentation;
 
     const isCtorOrDtor =
@@ -144,7 +143,7 @@ private string returnType(in from!"clang".Cursor cursor,
 
     const maybeStatic = cursor.storageClass == Cursor.StorageClass.Static ? "static " : "";
 
-    return maybeStatic ~ dType;
+    return maybeStatic ~ dType.makeFromImport;
 }
 
 private string[] maybeOperator(in from!"clang".Cursor cursor,
@@ -156,6 +155,7 @@ private string[] maybeOperator(in from!"clang".Cursor cursor,
     import std.typecons: Yes;
     import std.range: iota;
     import std.conv: text;
+    import dpp.translation.type:makeFromImport;
 
     if(!isSupportedOperatorInD(cursor)) return [];
 
@@ -163,7 +163,7 @@ private string[] maybeOperator(in from!"clang".Cursor cursor,
 
     return [
         // remove semicolon from the end with [0..$-1]
-        `extern(D) ` ~ functionDecl(cursor, context, operatorSpellingD(cursor, context), Yes.names)[0..$-1],
+        `extern(D) ` ~ makeFromImport(functionDecl(cursor, context, operatorSpellingD(cursor, context), Yes.names)[0..$-1]),
         `{`,
         `    return ` ~ operatorSpellingCpp(cursor, context) ~ `(` ~ params.length.iota.map!(a => text("arg", a)).join(", ") ~ `);`,
         `}`,
@@ -229,11 +229,12 @@ private string operatorSpellingD(in from!"clang".Cursor cursor,
     import std.range: walkLength;
     import std.algorithm: canFind;
     import std.conv: text;
+    import dpp.translation.type:makeFromImport;
 
     const cppOperator = cursor.spelling[OPERATOR_PREFIX.length .. $];
 
     if(cursor.kind == Cursor.Kind.ConversionFunction) {
-        return `opCast(T: ` ~ returnType(cursor, context) ~ `)`;
+        return `opCast(T: ` ~ returnType(cursor, context).makeFromImport ~ `)`;
     }
 
     if(cppOperator.length > 1 &&
@@ -283,7 +284,7 @@ private string operatorSpellingCpp(in from!"clang".Cursor cursor,
     in(isOperator(cursor))
 do
 {
-    import dpp.translation.type: translate;
+    import dpp.translation.type: translate, makeFromImport;
     import dpp.translation.exception: UntranslatableException;
     import clang: Cursor;
     import std.string: replace;
@@ -292,7 +293,7 @@ do
     const operator = cursor.spelling[OPERATOR_PREFIX.length .. $];
 
     if(cursor.kind == Cursor.Kind.ConversionFunction) {
-        return "opCppCast_" ~ translate(cursor.returnType, context).replace(".", "_");
+        return "opCppCast_" ~ translate(cursor.returnType, context).replace(".", "_").makeFromImport;
     }
 
     switch(operator) {
@@ -358,14 +359,14 @@ private string[] maybeCopyCtor(in from!"clang".Cursor cursor,
 {
 
     import dpp.translation.dlang: maybeRename, maybePragma;
-    import dpp.translation.type: translate;
+    import dpp.translation.type: translate, makeFromImport;
     import clang: Cursor, Type;
 
     if(!cursor.isCopyConstructor) return [];
 
     const param = params(cursor).front;
     const translated = translateFunctionParam(cursor, param, context);
-    const dType = translated["ref const(".length .. $ - 1];  // remove the constness
+    const dType = translated["ref const(".length .. $ - 1].makeFromImport;  // remove the constness
 
     return [
         `this(ref ` ~ dType ~ ` other)`,
@@ -382,7 +383,7 @@ private string[] maybeMoveCtor(in from!"clang".Cursor cursor,
 {
 
     import dpp.translation.dlang: maybeRename, maybePragma;
-    import dpp.translation.type: translate;
+    import dpp.translation.type: translate,makeFromImport;
     import clang: Cursor, Type;
 
     if(!cursor.isMoveConstructor) return [];
@@ -392,7 +393,7 @@ private string[] maybeMoveCtor(in from!"clang".Cursor cursor,
 
     return [
         maybePragma(cursor, context) ~ " this(" ~ pointee ~ "*);",
-        "this(" ~ translate(paramType, context) ~ " wrapper) {",
+        "this(" ~ translate(paramType, context).makeFromImport ~ " wrapper) {",
         "    this(wrapper.ptr);",
         "    *wrapper.ptr = typeof(*wrapper.ptr).init;",
         "}",
@@ -458,7 +459,8 @@ private string translateFunctionParam(in from!"clang".Cursor function_,
     @safe
 {
 
-    import dpp.translation.type: translate;
+    import dpp.translation.aggregate: maybeRenameTypeToBlob;
+    import dpp.translation.type: translate,makeFromImport;
     import clang: Type, Language;
     import std.typecons: Yes;
     import std.array: replace;
@@ -482,7 +484,7 @@ private string translateFunctionParam(in from!"clang".Cursor function_,
     const aggTemplateParamSpelling = useAggTemplateParamSpelling
         ? function_.semanticParent.templateParams[0].spelling
         : "";
-    const translation = translate(deunexpose(param.type), context, Yes.translatingFunction);
+    const translation = translate(deunexpose(param.type).maybeRenameTypeToBlob(context), context, Yes.translatingFunction).makeFromImport;
 
     return useAggTemplateParamSpelling
         ? translation.replace("type_parameter_0_0", aggTemplateParamSpelling)

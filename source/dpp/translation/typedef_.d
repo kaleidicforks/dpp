@@ -9,7 +9,7 @@ string[] translateTypedef(in from!"clang".Cursor typedef_,
                           ref from!"dpp.runtime.context".Context context)
     @safe
 {
-    import dpp.translation.type: translate, isTypeParameter;
+    import dpp.translation.type: translate, isTypeParameter,makeFromImport;
     import dpp.translation.aggregate: isAggregateC,maybeRenameTypeToBlob;
     import dpp.translation.dlang:maybeRename;
     import clang: Cursor, Type;
@@ -79,14 +79,14 @@ string[] translateTypedef(in from!"clang".Cursor typedef_,
     // it.c.compile.projects.struct with union
     return typedef_.spelling == underlyingSpelling
         ? []
-        : [`alias ` ~ maybeRename(typedef_, context) ~ ` = ` ~ underlyingSpelling  ~ `;`];
+        : [`alias ` ~ maybeRename(typedef_, context) ~ ` = ` ~ underlyingSpelling.makeFromImport  ~ `;`];
 }
 
 private string[] translateFunctionTypeDef(in from!"clang".Cursor typedef_,
                                           ref from!"dpp.runtime.context".Context context)
     @safe
 {
-    import dpp.translation.type: translate;
+    import dpp.translation.type: translate,makeFromImport;
     import dpp.translation.function_: translateParamTypes;
     import clang: Cursor, Type;
     import std.algorithm: map, filter;
@@ -97,7 +97,7 @@ private string[] translateFunctionTypeDef(in from!"clang".Cursor typedef_,
         ? underlyingType.pointee.returnType
         : underlyingType.returnType;
     context.log("Function typedef return type: ", returnType);
-    const returnTypeTransl = translate(returnType, context);
+    const returnTypeTransl = translate(returnType, context).makeFromImport;
 
     const params = translateParamTypes(typedef_, context.indent).join(", ");
     return [`alias ` ~ typedef_.spelling ~ ` = ` ~ returnTypeTransl ~ ` function(` ~ params ~ `);`];
